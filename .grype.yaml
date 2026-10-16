@@ -1,0 +1,6 @@
+# Grype configuration (https://github.com/anchore/grype)
+# Run locally from the repository root, after a build (or "./mvnw -f org.titou10.jtb.build/pom.xml generate-resources")
+# that copied the embedded jars into the lib/ folders of the plugins:  grype dir:.
+exclude:
+  - "./**/target/**"
+  - "./.git/**"

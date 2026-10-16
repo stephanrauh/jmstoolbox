@@ -43,6 +43,8 @@ import javax.jms.Session;
 import javax.jms.StreamMessage;
 
 import org.apache.activemq.ActiveMQConnectionFactory;
+import org.eclipse.swt.SWT;
+import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
@@ -75,15 +77,23 @@ import org.junit.rules.TestWatcher;
 /**
  * UI tests of JMSToolBox, run in the real application by Tycho with SWTBot.
  *
- * The sessions come from org.titou10.jtb.build/smoketest/config.xml, the brokers from smoketest/docker-compose.yml. All tests
- * use the queue JTB.TEST of the ActiveMQ Classic session and empty it first
+ * The sessions come from org.titou10.jtb.build/smoketest/config.xml, the brokers from smoketest/docker-compose.yml. The message tests
+ * use the queue JTB.TEST of the ActiveMQ Classic session and empty it first. The other sessions are only connected
  *
  */
 public class JMSToolBoxUITest {
 
    private static final String SESSION          = "ActiveMQ Classic";
    private static final String SESSION_ARTEMIS2 = "Artemis 2.x";
+   private static final String SESSION_ARTEMIS1 = "Artemis 1.x";
+   private static final String SESSION_ORACLE   = "Oracle AQ";
+   private static final String SESSION_SOLACE   = "Solace";
+   // All sessions of smoketest/config.xml
+   private static final List<String> SESSIONS   = List.of(SESSION, SESSION_ARTEMIS2, SESSION_ARTEMIS1, SESSION_ORACLE,
+                                                          SESSION_SOLACE);
    private static final String QUEUE            = "JTB.TEST";
+   // Oracle AQ doesn't allow dots in queue names. JMSToolBox shows the queue with its owner: JTB.JTB_TEST
+   private static final String QUEUE_ORACLE     = "JTB_TEST";
    private static final String VISUALIZER       = "SWTBot visualizer";
 
    // REST API (Jolokia) of the ActiveMQ Classic broker, used to prepare the queue
@@ -193,7 +203,8 @@ public class JMSToolBoxUITest {
 
       SWTBotShell logs = bot.shell("Script logs");
       step("Clicked 'Open Payload as... > " + VISUALIZER + "' on the message: dialog '" + logs.getText() + "' opened");
-      String expected = "SWTBOT:" + payload.toUpperCase();
+      // The visualizer replaces the blanks with a regular expression
+      String expected = "SWTBOT:" + payload.toUpperCase().replace(' ', '_');
       bot.waitUntil(new DefaultCondition() {
          @Override
          public boolean test() {
@@ -343,16 +354,57 @@ public class JMSToolBoxUITest {
    }
 
    // ----------------------------------------------------
-   // Artemis 2.x
+   // Other brokers
    // ----------------------------------------------------
+
+   // JMSToolBox shows a session in red if its Q Manager plugin is not installed or failed to start
+   @Test
+   public void allSessionsHaveAQManager() {
+      Tree tree = sessionsTree().widget;
+      List<String> shown = new ArrayList<>();
+      List<String> red = new ArrayList<>();
+      UIThreadRunnable.syncExec(() -> {
+         Color colorRed = Display.getDefault().getSystemColor(SWT.COLOR_RED);
+         for (TreeItem item : tree.getItems()) {
+            shown.add(item.getText());
+            // The viewer sets the color of the cell (column 0), not of the whole item
+            if (colorRed.equals(item.getForeground(0))) {
+               red.add(item.getText());
+            }
+         }
+      });
+      assertTrue("Sessions missing in " + shown, shown.containsAll(SESSIONS));
+      assertTrue("Sessions shown in red (Q Manager plugin missing or not started): " + red, red.isEmpty());
+      step("All sessions are shown with a Q Manager: " + SESSIONS);
+   }
 
    @Test
    public void connectArtemis2SessionAndListQueues() {
-      SWTBotTreeItem session = connect(SESSION_ARTEMIS2);
+      connectAndFindQueue(SESSION_ARTEMIS2, QUEUE);
+   }
 
-      SWTBotTreeItem queues = session.getNode("Queues").expand();
-      step("Expanded the queues of " + SESSION_ARTEMIS2 + ": " + queues.getNodes());
-      assertTrue("Queue " + QUEUE + " not found in " + queues.getNodes(), queues.getNodes().contains(QUEUE));
+   @Test
+   public void connectArtemis1SessionAndListQueues() {
+      connectAndFindQueue(SESSION_ARTEMIS1, QUEUE);
+   }
+
+   @Test
+   public void connectOracleAqSessionAndListQueues() {
+      connectAndFindQueue(SESSION_ORACLE, QUEUE_ORACLE);
+   }
+
+   @Test
+   public void connectSolaceSessionAndListQueues() {
+      connectAndFindQueue(SESSION_SOLACE, QUEUE);
+   }
+
+   // Connects the session and checks that the test queue of setup.sh is listed, with or without the owner as prefix
+   private static void connectAndFindQueue(String sessionName, String queue) {
+      SWTBotTreeItem queues = connect(sessionName).getNode("Queues").expand();
+      List<String> names = queues.getNodes();
+      step("Expanded the queues of " + sessionName + ": " + names);
+      assertTrue("Queue " + queue + " not found in " + names,
+                 names.stream().anyMatch(n -> n.equals(queue) || n.endsWith("." + queue)));
    }
 
    @Test

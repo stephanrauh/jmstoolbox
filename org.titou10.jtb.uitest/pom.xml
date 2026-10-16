@@ -55,25 +55,9 @@
          <plugin>
             <groupId>org.apache.maven.plugins</groupId>
             <artifactId>maven-dependency-plugin</artifactId>
-            <version>3.11.0</version>
-            <executions>
-               <execution>
-                  <id>copy-libs</id>
-                  <phase>generate-resources</phase>
-                  <goals>
-                     <goal>copy-dependencies</goal>
-                  </goals>
-                  <configuration>
-                     <outputDirectory>${project.basedir}/lib</outputDirectory>
-                     <stripVersion>true</stripVersion>
-                     <excludeTransitive>true</excludeTransitive>
-                     <includeScope>provided</includeScope>
-                     <overWriteReleases>true</overWriteReleases>
-                     <overWriteSnapshots>true</overWriteSnapshots>
-                  </configuration>
-               </execution>
-            </executions>
          </plugin>
+         <!-- "mvn clean" also deletes the jars copied into lib/. Not in the parent pom: maven-clean-plugin runs in   -->
+         <!-- every module, and the lib/ folder of other plugins holds jars that are in git or added by hand          -->
          <plugin>
             <groupId>org.apache.maven.plugins</groupId>
             <artifactId>maven-clean-plugin</artifactId>
@@ -128,6 +112,10 @@
                      <requirement><type>eclipse-plugin</type><id>org.titou10.jtb.core</id><versionRange>0.0.0</versionRange></requirement>
                      <requirement><type>eclipse-plugin</type><id>org.titou10.jtb.qm.activemq</id><versionRange>0.0.0</versionRange></requirement>
                      <requirement><type>eclipse-plugin</type><id>org.titou10.jtb.qm.artemis2</id><versionRange>0.0.0</versionRange></requirement>
+                     <!-- The Q Managers of all sessions in smoketest/config.xml. Without them, their sessions are shown in red -->
+                     <requirement><type>eclipse-plugin</type><id>org.titou10.jtb.qm.artemis</id><versionRange>0.0.0</versionRange></requirement>
+                     <requirement><type>eclipse-plugin</type><id>org.titou10.jtb.qm.oracleaq</id><versionRange>0.0.0</versionRange></requirement>
+                     <requirement><type>eclipse-plugin</type><id>org.titou10.jtb.qm.solace</id><versionRange>0.0.0</versionRange></requirement>
                      <requirement><type>eclipse-plugin</type><id>org.eclipse.e4.ui.workbench.swt</id><versionRange>0.0.0</versionRange></requirement>
                      <requirement><type>eclipse-plugin</type><id>org.eclipse.e4.ui.workbench.renderers.swt</id><versionRange>0.0.0</versionRange></requirement>
                      <requirement><type>eclipse-plugin</type><id>org.eclipse.e4.ui.workbench.addons.swt</id><versionRange>0.0.0</versionRange></requirement>

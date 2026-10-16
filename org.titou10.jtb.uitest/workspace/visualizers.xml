@@ -1,11 +1,12 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<!-- Copied into the workspace of the UI tests. The script runs in GraalJS; its output goes to the "Script logs" dialog -->
+<!-- Copied into the workspace of the UI tests. The script runs in GraalJS; its output goes to the "Script logs" dialog. -->
+<!-- The regular expression needs the TRegex engine of GraalJS (lib/regex.jar of org.titou10.jtb.core)                    -->
 <visualizers>
     <visualizer name="SWTBot visualizer" system="false">
         <kind>INLINE_SCRIPT</kind>
         <targetMsgType>TEXT</targetMsgType>
         <language>JavaScript</language>
         <showScriptLogs>true</showScriptLogs>
-        <source>print("SWTBOT:" + jtb_payloadText.toUpperCase());</source>
+        <source>print("SWTBOT:" + jtb_payloadText.toUpperCase().replace(/\s+/g, "_"));</source>
     </visualizer>
 </visualizers>
