@@ -1,0 +1,5 @@
+# Grype configuration (https://github.com/anchore/grype)
+# Run locally from the repository root with:  grype dir:.
+exclude:
+  - "./**/target/**"
+  - "./.git/**"
