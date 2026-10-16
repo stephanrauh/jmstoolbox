@@ -210,7 +210,8 @@ public class JMSToolBoxUITest {
 
       SWTBotShell logs = bot.shell("Script logs");
       step("Clicked 'Open Payload as... > " + VISUALIZER + "' on the message: dialog '" + logs.getText() + "' opened");
-      String expected = "SWTBOT:" + payload.toUpperCase();
+      // The visualizer replaces the blanks with a regular expression
+      String expected = "SWTBOT:" + payload.toUpperCase().replace(' ', '_');
       bot.waitUntil(new DefaultCondition() {
          @Override
          public boolean test() {

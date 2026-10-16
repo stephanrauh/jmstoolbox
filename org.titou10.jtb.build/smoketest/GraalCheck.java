@@ -23,22 +23,24 @@ public class GraalCheck {
       bindings.put("polyglot.js.allowHostAccess", true);
       bindings.put("polyglot.js.allowHostClassLookup", (Predicate<String>) _ -> true);
 
-      // A visualizer-like script: reads the payload, uses JavaScript features and calls back into a Java object
+      // A visualizer-like script: reads the payload, uses JavaScript features and calls back into a Java object.
+      // Regular expressions need the TRegex engine of GraalJS (jar "regex"), a separate dependency of js-language
       String source = """
                var data = JSON.parse(jtb_payloadText);
                var upper = data.items.map(function (i) { return i.toUpperCase(); }).join(",");
                jtb_visualizer.add(upper);
-               upper + "|" + java.lang.Integer.toHexString(data.count);
+               var id = /order-(\\d+)/.exec(data.ref)[1];
+               upper + "|" + java.lang.Integer.toHexString(data.count) + "|" + id + "|" + data.ref.replace(/[aeiou]/g, "_");
                """;
       CompiledScript cs = ((Compilable) scriptEngine).compile(source);
 
       StringBuilder sb = new StringBuilder();
       SimpleBindings global = new SimpleBindings();
-      global.put("jtb_payloadText", "{\"items\":[\"a\",\"b\"],\"count\":255}");
+      global.put("jtb_payloadText", "{\"items\":[\"a\",\"b\"],\"count\":255,\"ref\":\"order-4711\"}");
       global.put("jtb_visualizer", new Hook(sb));
       Object result = cs.eval(global);
 
-      String expected = "A,B|ff";
+      String expected = "A,B|ff|4711|_rd_r-4711";
       if (!expected.equals(result) || !"A,B".equals(sb.toString())) {
          throw new IllegalStateException("Unexpected result '" + result + "' / '" + sb + "', expected '" + expected + "'");
       }
