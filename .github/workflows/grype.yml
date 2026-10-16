@@ -1,0 +1,32 @@
+name: Grype Vulnerability Scan
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "dev" ]
+  pull_request:
+    branches: [ "dev" ]
+  schedule:
+    - cron: '0 5 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  grype:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v7
+
+    # Results are only printed to the job log: no artifact, no SARIF upload, no DB cache
+    - name: Scan repository with Grype
+      uses: anchore/scan-action@v7
+      with:
+        path: "."
+        fail-build: false
+        output-format: table
+        output-file: grype-report.txt
+
+    - name: Print Grype report
+      run: cat grype-report.txt
