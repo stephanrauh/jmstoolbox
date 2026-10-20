@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# Starts the brokers of docker-compose.yml and creates the queue JTB.TEST (JTB_TEST in Oracle AQ) in each of them.
+# Safe to run again: existing queues are left alone. Any other error stops the script
+set -euo pipefail
+cd "$(dirname "$0")"
+
+# Runs a command that creates a queue. If it fails, its output must match the pattern of an "already exists" error (if any)
+# and the other lines of the output must not contain any error, otherwise the output is shown and the script stops.
+# The Artemis CLI exits with 0 even if it fails: its output is checked too
+create() {
+   local exists=$1 out
+   shift
+   if out=$("$@" 2>&1) && ! grep -qE 'Failed|Exception' <<<"$out"; then
+      return 0
+   fi
+   if [[ -n "$exists" ]] && grep -qiE "$exists" <<<"$out" \
+         && ! grep -viE "$exists" <<<"$out" | grep -qE 'Failed|failed|Exception|Error'; then
+      echo "  (already exists)"
+      return 0
+   fi
+   echo "  failed: $out" >&2
+   return 1
+}
+
+# Posts a JSON request and fails unless the answer is HTTP 200 and contains the given text
+post() {
+   local url=$1 data=$2 expected=$3 out
+   out=$(curl -sS -w '\nHTTP %{http_code}' -u admin:admin -H 'Origin: http://localhost' -H 'Content-Type: application/json' \
+            -X POST "$url" -d "$data")
+   if [[ "$out" == *"HTTP 200" && "$out" == *"$expected"* ]]; then
+      return 0
+   fi
+   echo "$out"
+   return 1
+}
+
+docker compose up -d --wait
+
+# addQueue does nothing if the queue exists. Jolokia answers HTTP 200 even on errors: its status is in the body
+echo "ActiveMQ Classic: creating queue JTB.TEST"
+create '' post http://localhost:8162/api/jolokia/ \
+   '{"type":"exec","mbean":"org.apache.activemq:type=Broker,brokerName=localhost","operation":"addQueue","arguments":["JTB.TEST"]}' \
+   '"status":200'
+
+echo "Artemis 2.x: creating queue JTB.TEST"
+create 'AMQ229019' docker compose exec -T artemis /var/lib/artemis-instance/bin/artemis queue create \
+   --name JTB.TEST --address JTB.TEST --anycast --durable --auto-create-address --preserve-on-no-consumers \
+   --user admin --password admin --silent </dev/null
+
+# Artemis 1.x doesn't tell why it failed: this message without any other error is the queue that already exists
+# (stdin of the Artemis CLI: /dev/null, otherwise it asks for another URL if it can not connect)
+echo "Artemis 1.x: creating queue JTB.TEST"
+create '^Failed to create jms queue JTB\.TEST\.$' docker compose exec -T artemis1 /var/lib/artemis/bin/artemis destination create \
+   --name JTB.TEST --type jms-queue --durable --user admin --password admin --url tcp://localhost:61616 </dev/null
+
+echo "Solace: creating queue JTB.TEST"
+create 'ALREADY_EXISTS' post http://localhost:8088/SEMP/v2/config/msgVpns/default/queues \
+   '{"queueName":"JTB.TEST","accessType":"exclusive","permission":"delete","ingressEnabled":true,"egressEnabled":true}' \
+   '"responseCode":200'
+
+# -L: no prompt for another password if the login fails. ORA-24001: queue table exists, ORA-24006: queue exists
+echo "Oracle AQ: creating queue JTB_TEST"
+create '' docker compose exec -T oracle sqlplus -s -L sys/oracle@localhost/FREEPDB1 as sysdba <<'EOF'
+WHENEVER SQLERROR EXIT FAILURE
+GRANT AQ_ADMINISTRATOR_ROLE, AQ_USER_ROLE, SELECT ANY DICTIONARY TO jtb;
+GRANT EXECUTE ON DBMS_AQ TO jtb;
+GRANT EXECUTE ON DBMS_AQADM TO jtb;
+EOF
+create '' docker compose exec -T oracle sqlplus -s -L jtb/jtb@localhost/FREEPDB1 <<'EOF'
+WHENEVER SQLERROR EXIT FAILURE
+BEGIN
+  BEGIN
+    DBMS_AQADM.CREATE_QUEUE_TABLE(queue_table => 'JTB_QT', queue_payload_type => 'SYS.AQ$_JMS_MESSAGE');
+  EXCEPTION
+    WHEN OTHERS THEN IF SQLCODE != -24001 THEN RAISE; END IF;
+  END;
+  BEGIN
+    DBMS_AQADM.CREATE_QUEUE(queue_name => 'JTB_TEST', queue_table => 'JTB_QT');
+  EXCEPTION
+    WHEN OTHERS THEN IF SQLCODE != -24006 THEN RAISE; END IF;
+  END;
+  DBMS_AQADM.START_QUEUE(queue_name => 'JTB_TEST');
+END;
+/
+EOF
+
+echo "Brokers ready. Start JMSToolBox with ./run.sh"
