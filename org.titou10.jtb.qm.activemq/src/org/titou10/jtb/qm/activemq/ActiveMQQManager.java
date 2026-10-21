@@ -18,7 +18,6 @@ package org.titou10.jtb.qm.activemq;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -26,6 +25,7 @@ import java.util.SortedMap;
 import java.util.SortedSet;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.concurrent.ConcurrentHashMap;
 
 import javax.jms.Connection;
 import javax.jms.JMSException;
@@ -45,6 +45,7 @@ import javax.management.remote.JMXServiceURL;
 import org.apache.activemq.ActiveMQConnection;
 import org.apache.activemq.ActiveMQConnectionFactory;
 import org.apache.activemq.advisory.DestinationSource;
+import org.apache.activemq.advisory.DestinationListener;
 import org.apache.activemq.command.ActiveMQQueue;
 import org.apache.activemq.command.ActiveMQTopic;
 import org.slf4j.Logger;
@@ -88,6 +89,9 @@ public class ActiveMQQManager extends QManager {
    private static final QueryExp           JMX_BROKER_QUERY       = Query
             .isInstanceOf(Query.value("org.apache.activemq.broker.jmx.BrokerViewMBean"));
 
+   // ActiveMQ reads its listener field twice during dispatch; never replace an installed listener with null.
+   private static final DestinationListener NO_DESTINATION_LISTENER = event -> {};
+
    private static final String             SYSTEM_PREFIX          = "ActiveMQ.";
 
    private static final String             CR                     = "\n";
@@ -111,7 +115,7 @@ public class ActiveMQQManager extends QManager {
 
    private static final String             HELP_TEXT;
 
-   private final Map<Integer, SessionInfo> sessionsInfo           = new HashMap<>();
+   private final Map<Integer, SessionInfo> sessionsInfo           = new ConcurrentHashMap<>();
 
    // ------------------------
    // Constructor
@@ -288,6 +292,11 @@ public class ActiveMQQManager extends QManager {
          jmsConnection.setClientID(clientID);
          jmsConnection.start();
 
+         // Begin receiving advisory messages before the initial destination snapshot is taken.
+         if (!useJMX) {
+            jmsConnection.getDestinationSource();
+         }
+
          log.info("connected to {}", sessionDef.getName());
 
          // Store per connection related data
@@ -348,6 +357,21 @@ public class ActiveMQQManager extends QManager {
       log.debug("Discovered {} queues and {} topics", listQueueData.size(), listTopicData.size());
 
       return new DestinationData(listQueueData, listTopicData);
+   }
+
+   @Override
+   public boolean setDestinationChangeListener(Connection jmsConnection, Runnable listener) throws Exception {
+      if (sessionsInfo.get(jmsConnection.hashCode()).isUseJMX()) {
+         return false;
+      }
+      DestinationSource source = ((ActiveMQConnection) jmsConnection).getDestinationSource();
+      source.setDestinationListener(listener == null ? NO_DESTINATION_LISTENER : event -> {
+         // Temporary destinations are not displayed by this plugin.
+         if (!event.getDestination().isTemporary()) {
+            listener.run();
+         }
+      });
+      return true;
    }
 
    public DestinationData withJMX(Connection jmsConnection, boolean showSystemObjects) throws Exception {

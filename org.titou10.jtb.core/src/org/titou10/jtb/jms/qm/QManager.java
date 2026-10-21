@@ -73,6 +73,12 @@ public abstract class QManager implements JTBObject, Comparable<QManager> {
 
    public abstract DestinationData discoverDestinations(Connection jmsConnection, boolean showSystemObjects) throws Exception;
 
+   // Optional live discovery. Register before taking the initial snapshot; null detaches the listener.
+   // Notifications must be lightweight and must not call back into JMS on the provider's dispatch thread.
+   public boolean setDestinationChangeListener(Connection jmsConnection, Runnable listener) throws Exception {
+      return false;
+   }
+
    public abstract void close(Connection jmsConnection) throws JMSException;
 
    // Destination related

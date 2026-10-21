@@ -62,7 +62,7 @@ public class JTBSession implements JTBObject, Comparable<JTBSession> {
    // ----------------------------
    // Manage Connections
    // ----------------------------
-   public JTBConnection getJTBConnection(JTBSessionClientType jtbSessionClientType) {
+   public synchronized JTBConnection getJTBConnection(JTBSessionClientType jtbSessionClientType) {
       JTBConnection jtbConnection = jtbConnections.get(jtbSessionClientType);
       if (jtbConnection == null) {
          jtbConnection = new JTBConnection(ps,
@@ -75,7 +75,7 @@ public class JTBSession implements JTBObject, Comparable<JTBSession> {
       return jtbConnection;
    }
 
-   public void disconnectAll() {
+   public synchronized void disconnectAll() {
       log.trace("disconnectAll for '{}'", getName());
       for (Map.Entry<JTBSessionClientType, JTBConnection> e : jtbConnections.entrySet()) {
          JTBConnection jtbConnection = e.getValue();
@@ -100,7 +100,7 @@ public class JTBSession implements JTBObject, Comparable<JTBSession> {
    // Helpers
    // ------------------------
 
-   public void updateMetaQManager(MetaQManager mqm) {
+   public synchronized void updateMetaQManager(MetaQManager mqm) {
       this.mqm = mqm;
       this.qm = mqm.getQmanager();
       for (JTBConnection jtbConnection : jtbConnections.values()) {

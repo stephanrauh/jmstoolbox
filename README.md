@@ -19,6 +19,7 @@ JMSToolBox exposes some of its features as **REST services** so it can be easily
 - Fast and easy configuration compared to other similar tools
 - Share setup/configuration with co-workers via import/export fonctions (config, variables, templates,...)
 - Display messages published to a JMS Topic
+- ActiveMQ Classic (without JMX): the session browser updates live when queues and topics are created or deleted
 - Perfect for testing JMS based applications (Create templates with random values, replay them...)
 - Internally architected as "eclipse plugins". 1 Q Manager = 1 Plugin
 
@@ -110,3 +111,109 @@ To configure a Queue provider:
 #### Configuring a Session:
 - Menu File/New Session..., choose the Q Provider and specify the various parameters. Use the help icon for this
 - Double click on the session, the list of queues and topics should appear...
+
+### Building and testing JMSToolBox
+
+#### Building
+Requires Java 25 or newer. Maven doesn't need to be installed: the Maven Wrapper downloads the right version (Maven 3.9.x)
+```
+./mvnw -f org.titou10.jtb.build/pom.xml clean verify
+```
+The packages for all platforms end up in `org.titou10.jtb.product/target/products`    
+Maven 3.10 can't build JMSToolBox yet (Tycho fails with "Invalid Collect Request"), so please use `./mvnw` instead of `mvn`
+
+#### Smoke test
+The folder `org.titou10.jtb.build/smoketest` contains a manual smoke test against real brokers running in Docker.
+It requires Docker with about 5 GB of memory and works on macOS and Linux
+```
+org.titou10.jtb.build/smoketest/smoketest.sh
+```
+The script
+- builds JMSToolBox
+- starts ActiveMQ Classic, Artemis 1.x and 2.x, Solace and Oracle (for Oracle AQ) in Docker and creates a test queue in each of them
+- starts JMSToolBox with a separate workspace (your `<user_home>/.jtb` folder is not touched) that already contains a session for each broker
+- stops and removes the brokers when JMSToolBox is closed
+
+In JMSToolBox, open each session, send a message to the queue `JTB.TEST` (`JTB_TEST` for Oracle AQ) and check that it shows up when browsing the queue.
+Also run a script (Scripts tab) to check the JavaScript engine.
+In case of problems, the log is in `org.titou10.jtb.build/smoketest/target/workspace/JMSToolBox/jmstoolbox.log`
+
+Options:
+- `--skip-build`: use the existing build
+- `--reset`: start with a fresh workspace. Needed after changing `smoketest/config.xml`, as the workspace is kept between runs
+- `--keep`: leave the brokers running. Stop them later with `docker compose -f org.titou10.jtb.build/smoketest/docker-compose.yml down -v`
+
+The steps can also be run on their own: `setup.sh` starts the brokers, `run.sh` starts JMSToolBox
+
+#### Live ActiveMQ destination discovery
+ActiveMQ Classic sessions with `useJMX=false` learn about destinations from advisory messages, which the broker sends
+one at a time: a burst for the existing destinations when connecting, then one whenever a queue or topic is created or
+deleted. While a session is connected, the session browser updates as they arrive, so it also shows destinations that
+other clients create or delete. It shows the first list right away, without waiting for discovery to settle. The tree is
+refreshed only when a destination is added or removed, and listening stops when the session is disconnected. Sessions
+using JMX, and all other Q Managers, read the list once when connecting; use "Rescan Destinations" to update it.
+
+`GET /rest/session/{sessionName}` accepts two optional query parameters (milliseconds):
+
+| Parameter | Default | Meaning |
+| --- | --- | --- |
+| `discoveryTimeoutMs` | `5000` | Maximum additional time to wait for discovery after connecting. |
+| `discoveryQuietPeriodMs` | `500` | Time without destination advisories before returning the published snapshot. |
+
+For example: `/rest/session/Discovery%201?discoveryTimeoutMs=10000&discoveryQuietPeriodMs=1000`.
+Either value may be `0` to return the current snapshot immediately. Values must be between `0` and `60000`;
+invalid values return HTTP 400. Setting the quiet period greater than or equal to the timeout waits for the full timeout
+after recent activity. Connection establishment has its own provider-specific timeouts and is outside this discovery budget.
+The parameters only affect providers supporting live discovery; other providers retain their synchronous discovery.
+The JSON array and existing success status codes are unchanged. On timeout, the current snapshot is returned and discovery
+continues in the background. A quiet period is a best-effort estimate, not a guarantee of completeness: delayed advisories
+can arrive later. Subsequent requests include those updates.
+
+#### Automated smoke test
+The same brokers and sessions, tested automatically through the REST services of JMSToolBox. It runs on every push and
+pull request to `dev` and `maven-managed-libs` in GitHub Actions (`.github/workflows/smoketest.yml`), and locally with
+```
+org.titou10.jtb.build/smoketest/headless.sh
+```
+(options `--skip-build` and `--keep` as above). On macOS, the JMSToolBox window shows up while the test runs; on Linux
+without a display, it runs in a virtual one (`xvfb-run`). The script
+- tests every session of `smoketest/config.xml` (`headless_test.py`): list the destinations, send a message to the test
+  queue, browse it, empty the queue. Each request has a timeout of 60 s, so a hanging Q Manager fails the test
+- injects discovery and detach failures against the running ActiveMQ broker; verifies recovery without another advisory,
+  JMS/JMX cleanup, timeout warnings, stable read-only snapshots, listener replacement and concurrent shutdown
+- checks discovery timing and that ActiveMQ Classic without JMX lists all of 600 queues and 600 topics with the default REST wait
+  (sessions "Discovery" and, through Toxiproxy with 50 ms network latency, "Discovery slow")
+- checks that JMSToolBox found its JavaScript engine (GraalJS, used by the visualizers) at startup, and runs a
+  visualizer-like script with the GraalJS jars and the Java runtime shipped with JMSToolBox (`GraalCheck.java`)
+- checks the log for unexpected errors
+
+It ends with exit code 0 only if all checks passed. In GitHub Actions, the log of JMSToolBox is available as artifact
+`smoketest-logs`
+
+#### UI tests
+`org.titou10.jtb.uitest` contains UI tests written with [SWTBot](https://eclipse.dev/swtbot/): Tycho starts
+JMSToolBox and SWTBot clicks through it like a user. With the ActiveMQ Classic session, they connect, list the queues,
+send a message with a property through the "Send New Message" dialog, check the details of a message (toString, JMS
+Headers, Properties), show messages of every JMS type (text, bytes, map, object, stream, no payload) in the details and in
+the "View Message" dialog, show a JSON payload formatted and as a tree, save a message as template and send a message
+from it, and open a message with a JavaScript visualizer (`org.titou10.jtb.uitest/workspace/visualizers.xml`). They also
+connect the Artemis 2.x session. They are only built with the Maven profile
+`uitest` and run with
+```
+org.titou10.jtb.build/smoketest/uitest.sh
+```
+(option `--keep` as above, `--slow` to watch them). Don't use mouse and keyboard while they run: the JMSToolBox window
+shows up and SWTBot needs the focus. On Linux without a display, they run in a virtual one (`xvfb-run`).
+The report `org.titou10.jtb.uitest/target/uitest-report/index.html` shows every step of each test with pictures of
+the JMSToolBox windows. In GitHub Actions, the tests run in their own job; the report is available as artifact
+`uitest-report`, a summary is shown on the page of the run
+
+| Broker           | Session in JMSToolBox | Host ports                                   | User / password |
+|------------------|-----------------------|----------------------------------------------|-----------------|
+| ActiveMQ Classic | ActiveMQ Classic      | 61617 (OpenWire), 1099 (JMX), 8162 (console) | admin / admin   |
+| Artemis 2.x      | Artemis 2.x           | 61616, 8161 (console)                        | admin / admin   |
+| Artemis 1.5      | Artemis 1.x           | 61618                                        | admin / admin   |
+| Solace           | Solace                | 55556 (SMF), 8088 (SEMP)                     | admin / admin (management) |
+| Oracle Free      | Oracle AQ             | 1521 (service FREEPDB1)                      | jtb / jtb       |
+
+The other Q Managers are not part of the smoke test (yet). Most of them need proprietary jars or brokers that can't easily be run in Docker

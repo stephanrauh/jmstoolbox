@@ -38,6 +38,7 @@ import org.slf4j.LoggerFactory;
 import org.titou10.jtb.config.ConfigManager;
 import org.titou10.jtb.config.gen.SessionDef;
 import org.titou10.jtb.dialog.SessionConnectDialog;
+import org.titou10.jtb.jms.model.JTBConnection;
 import org.titou10.jtb.jms.model.JTBSession;
 import org.titou10.jtb.jms.model.JTBSessionClientType;
 import org.titou10.jtb.ui.JTBStatusReporter;
@@ -108,7 +109,9 @@ public class SessionConnectHandler {
          @Override
          public void run() {
             try {
-               jtbSession.getJTBConnection(JTBSessionClientType.GUI).connect();
+               JTBConnection connection = jtbSession.getJTBConnection(JTBSessionClientType.GUI);
+               connection.setDestinationsChangedListener(() -> eventBroker.post(Constants.EVENT_DESTINATIONS_CHANGED, connection));
+               connection.connect();
 
                // Refresh Session Browser
                eventBroker.send(Constants.EVENT_REFRESH_SESSION_BROWSER, nodeJTBSession);

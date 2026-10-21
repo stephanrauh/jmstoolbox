@@ -1,0 +1,3 @@
+# Libraries in the lib/ folders of the plugins
+*/lib/
+*.DS_Store
