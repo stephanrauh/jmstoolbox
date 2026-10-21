@@ -19,10 +19,12 @@ package org.titou10.jtb.rest.service;
 import java.util.List;
 
 import jakarta.inject.Singleton;
+import jakarta.ws.rs.DefaultValue;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.Produces;
+import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
@@ -32,6 +34,7 @@ import org.titou10.jtb.connector.ExternalConnectorManager;
 import org.titou10.jtb.connector.ex.ExecutionException;
 import org.titou10.jtb.connector.ex.UnknownSessionException;
 import org.titou10.jtb.connector.transport.Destination;
+import org.titou10.jtb.jms.qm.DestinationDiscovery;
 import org.titou10.jtb.rest.util.Constants;
 import org.titou10.jtb.rest.util.Utils;
 
@@ -56,18 +59,36 @@ public class SessionServices {
 
    // -----------------------------------
    // Retrieve Destinations for a Session
-   // /rest/message/<sessionName>
+   // /rest/session/<sessionName>?discoveryTimeoutMs=5000&discoveryQuietPeriodMs=500
    // -----------------------------------
 
    @GET
    @Path("/{" + Constants.P_SESSION_NAME + "}")
    @Produces(MediaType.APPLICATION_JSON)
-   public Response getDestinations(@PathParam(Constants.P_SESSION_NAME) String sessionName) {
+   public Response getDestinations(@PathParam(Constants.P_SESSION_NAME) String sessionName,
+                                   @DefaultValue("" + DestinationDiscovery.DEFAULT_TIMEOUT_MS) @QueryParam("discoveryTimeoutMs") String timeout,
+                                   @DefaultValue("" + DestinationDiscovery.DEFAULT_QUIET_PERIOD_MS) @QueryParam("discoveryQuietPeriodMs") String quietPeriod) {
       log.debug("getDestinationNames. sessionName={}", sessionName);
+
+      long discoveryTimeoutMs;
+      long discoveryQuietPeriodMs;
+      try {
+         discoveryTimeoutMs = Long.parseLong(timeout);
+         discoveryQuietPeriodMs = Long.parseLong(quietPeriod);
+         DestinationDiscovery.validateTimes(discoveryTimeoutMs, discoveryQuietPeriodMs);
+      } catch (NumberFormatException e) {
+         return Response.status(Response.Status.BAD_REQUEST).entity("Discovery times must be integers in milliseconds").build();
+      } catch (IllegalArgumentException e) {
+         return Response.status(Response.Status.BAD_REQUEST).entity(e.getMessage()).build();
+      }
+      // Bound server-side waits; connection establishment has its own provider-specific timeouts.
+      if (discoveryTimeoutMs > 60000 || discoveryQuietPeriodMs > 60000) {
+         return Response.status(Response.Status.BAD_REQUEST).entity("Discovery times must be between 0 and 60000 ms").build();
+      }
 
       try {
 
-         List<Destination> destinations = eConfigManager.getDestination(sessionName);
+         List<Destination> destinations = eConfigManager.getDestination(sessionName, discoveryTimeoutMs, discoveryQuietPeriodMs);
          log.debug("nb destinations : {}", destinations.size());
 
          return destinations.isEmpty() ? Response.noContent().build() : Response.ok(destinations).build();

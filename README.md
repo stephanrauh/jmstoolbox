@@ -19,6 +19,7 @@ JMSToolBox exposes some of its features as **REST services** so it can be easily
 - Fast and easy configuration compared to other similar tools
 - Share setup/configuration with co-workers via import/export fonctions (config, variables, templates,...)
 - Display messages published to a JMS Topic
+- ActiveMQ Classic (without JMX): the session browser updates live when queues and topics are created or deleted
 - Perfect for testing JMS based applications (Create templates with random values, replay them...)
 - Internally architected as "eclipse plugins". 1 Q Manager = 1 Plugin
 
@@ -144,6 +145,30 @@ Options:
 
 The steps can also be run on their own: `setup.sh` starts the brokers, `run.sh` starts JMSToolBox
 
+#### Live ActiveMQ destination discovery
+ActiveMQ Classic sessions with `useJMX=false` learn about destinations from advisory messages, which the broker sends
+one at a time: a burst for the existing destinations when connecting, then one whenever a queue or topic is created or
+deleted. While a session is connected, the session browser updates as they arrive, so it also shows destinations that
+other clients create or delete. It shows the first list right away, without waiting for discovery to settle. The tree is
+refreshed only when a destination is added or removed, and listening stops when the session is disconnected. Sessions
+using JMX, and all other Q Managers, read the list once when connecting; use "Rescan Destinations" to update it.
+
+`GET /rest/session/{sessionName}` accepts two optional query parameters (milliseconds):
+
+| Parameter | Default | Meaning |
+| --- | --- | --- |
+| `discoveryTimeoutMs` | `5000` | Maximum additional time to wait for discovery after connecting. |
+| `discoveryQuietPeriodMs` | `500` | Time without destination advisories before returning the published snapshot. |
+
+For example: `/rest/session/Discovery%201?discoveryTimeoutMs=10000&discoveryQuietPeriodMs=1000`.
+Either value may be `0` to return the current snapshot immediately. Values must be between `0` and `60000`;
+invalid values return HTTP 400. Setting the quiet period greater than or equal to the timeout waits for the full timeout
+after recent activity. Connection establishment has its own provider-specific timeouts and is outside this discovery budget.
+The parameters only affect providers supporting live discovery; other providers retain their synchronous discovery.
+The JSON array and existing success status codes are unchanged. On timeout, the current snapshot is returned and discovery
+continues in the background. A quiet period is a best-effort estimate, not a guarantee of completeness: delayed advisories
+can arrive later. Subsequent requests include those updates.
+
 #### Automated smoke test
 The same brokers and sessions, tested automatically through the REST services of JMSToolBox. It runs on every push and
 pull request to `dev` and `maven-managed-libs` in GitHub Actions (`.github/workflows/smoketest.yml`), and locally with
@@ -154,7 +179,9 @@ org.titou10.jtb.build/smoketest/headless.sh
 without a display, it runs in a virtual one (`xvfb-run`). The script
 - tests every session of `smoketest/config.xml` (`headless_test.py`): list the destinations, send a message to the test
   queue, browse it, empty the queue. Each request has a timeout of 60 s, so a hanging Q Manager fails the test
-- checks that ActiveMQ Classic without JMX lists all of 600 queues and 600 topics on the first listing after connecting
+- injects discovery and detach failures against the running ActiveMQ broker; verifies recovery without another advisory,
+  JMS/JMX cleanup, timeout warnings, stable read-only snapshots, listener replacement and concurrent shutdown
+- checks discovery timing and that ActiveMQ Classic without JMX lists all of 600 queues and 600 topics with the default REST wait
   (sessions "Discovery" and, through Toxiproxy with 50 ms network latency, "Discovery slow")
 - checks that JMSToolBox found its JavaScript engine (GraalJS, used by the visualizers) at startup, and runs a
   visualizer-like script with the GraalJS jars and the Java runtime shipped with JMSToolBox (`GraalCheck.java`)

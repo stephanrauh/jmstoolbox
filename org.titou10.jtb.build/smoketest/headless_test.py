@@ -4,6 +4,7 @@
 # Every request has a timeout, so a hanging Q Manager plugin fails the test instead of blocking it.
 # Only uses the Python standard library.
 import json
+import base64
 import sys
 import time
 import urllib.error
@@ -91,22 +92,89 @@ def test_discovery(session):
     return f"all {LOAD_COUNT} queues and {LOAD_COUNT} topics listed"
 
 
+def jolokia(operation, name):
+    body = {"type": "exec", "mbean": "org.apache.activemq:type=Broker,brokerName=localhost",
+            "operation": operation, "arguments": [name]}
+    req = urllib.request.Request("http://localhost:8162/api/jolokia/", data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json", "Origin": "http://localhost",
+                                          "Authorization": "Basic " + base64.b64encode(b"admin:admin").decode()})
+    with urllib.request.urlopen(req, timeout=TIMEOUT) as response:
+        result = json.load(response)
+        if result.get("status") != 200:
+            raise AssertionError(f"Jolokia {operation} failed: {result}")
+
+
+def test_live_discovery():
+    session = "Discovery 1"
+    path = f"/session/{q(session)}?discoveryTimeoutMs=0"
+    request("GET", path)  # Connect first: the following destinations are genuinely new.
+    name = f"JTB.LIVE.{time.time_ns()}"
+    expected = {(name, "QUEUE"), (name, "TOPIC")}
+
+    def wait_for(present):
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            _, destinations = request("GET", path)
+            found = {(d["name"], d["type"]) for d in destinations or []}
+            matches = expected <= found if present else not (expected & found)
+            if matches:
+                return
+            time.sleep(0.1)
+        raise AssertionError(f"live destinations did not {'appear' if present else 'disappear'}")
+
+    try:
+        jolokia("addQueue", name)
+        jolokia("addTopic", name)
+        wait_for(True)
+    finally:
+        jolokia("removeQueue", name)
+        jolokia("removeTopic", name)
+    wait_for(False)
+    return "queue and topic additions/removals visible on the existing connection"
+
+
+def test_discovery_parameters():
+    path = f"/session/{q('Discovery 1')}"
+    for query in ("discoveryTimeoutMs=-1", "discoveryTimeoutMs=60001", "discoveryQuietPeriodMs=-1",
+                  "discoveryQuietPeriodMs=60001", "discoveryTimeoutMs=abc", "discoveryQuietPeriodMs=1.5",
+                  "discoveryTimeoutMs=99999999999999999999999"):
+        try:
+            with urllib.request.urlopen(BASE_URL + path + "?" + query, timeout=TIMEOUT):
+                pass
+        except urllib.error.HTTPError as e:
+            if e.code != 400:
+                raise AssertionError(f"{query}: expected HTTP 400, got {e.code}") from None
+        else:
+            raise AssertionError(f"{query}: invalid value was accepted")
+
+    # Either zero disables waiting, even if the other parameter requests a long wait.
+    for query in ("discoveryTimeoutMs=0&discoveryQuietPeriodMs=60000",
+                  "discoveryTimeoutMs=60000&discoveryQuietPeriodMs=0"):
+        start = time.monotonic()
+        request("GET", path + "?" + query)
+        if time.monotonic() - start > 3:
+            raise AssertionError(f"{query}: zero must disable discovery waiting")
+    return "parameter validation and immediate snapshots OK"
+
+
 def main():
     config = sys.argv[1] if len(sys.argv) > 1 else "config.xml"
     sessions = [s.get("name") for s in ET.parse(config).getroot().iter("sessionDef")]
 
     failures = 0
-    for session in sessions:
+    checks = [(session, lambda session=session: (test_discovery if session.startswith("Discovery") else test_session)(session))
+              for session in sessions]
+    checks += [("Live discovery", test_live_discovery), ("Discovery parameters", test_discovery_parameters)]
+    for label, test in checks:
         start = time.time()
         try:
-            test = test_discovery if session.startswith("Discovery") else test_session
-            result, ok = test(session), True
+            result, ok = test(), True
         except AssertionError as e:
             result, ok = str(e), False
             failures += 1
-        print(f"{'PASS' if ok else 'FAIL'}  {session:<20} {time.time() - start:5.1f} s  {result}", flush=True)
+        print(f"{'PASS' if ok else 'FAIL'}  {label:<20} {time.time() - start:5.1f} s  {result}", flush=True)
 
-    print(f"\n{len(sessions) - failures} of {len(sessions)} sessions passed")
+    print(f"\n{len(checks) - failures} of {len(checks)} checks passed")
     sys.exit(1 if failures else 0)
 
 

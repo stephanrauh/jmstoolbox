@@ -44,6 +44,7 @@ import org.titou10.jtb.connector.transport.Destination.Type;
 import org.titou10.jtb.connector.transport.MessageInput;
 import org.titou10.jtb.connector.transport.MessageOutput;
 import org.titou10.jtb.connector.transport.QueueOutput;
+import org.titou10.jtb.jms.qm.DestinationDiscovery;
 import org.titou10.jtb.jms.model.JTBConnection;
 import org.titou10.jtb.jms.model.JTBDestination;
 import org.titou10.jtb.jms.model.JTBMessage;
@@ -144,10 +145,15 @@ public class ExternalConnectorManager {
 
    public List<Destination> getDestination(String sessionName) throws ExecutionException, UnknownSessionException {
 
+      return getDestination(sessionName, DestinationDiscovery.DEFAULT_TIMEOUT_MS, DestinationDiscovery.DEFAULT_QUIET_PERIOD_MS);
+   }
+
+   public List<Destination> getDestination(String sessionName, long discoveryTimeoutMs, long discoveryQuietPeriodMs)
+            throws ExecutionException, UnknownSessionException {
       // Get JTBConnection
       JTBConnection jtbConnection = getJTBConnection(sessionName);
       try {
-         jtbConnection.connect();
+         jtbConnection.connect(discoveryTimeoutMs, discoveryQuietPeriodMs);
       } catch (Exception e) {
          log.error("Exception when reading destinations of '{}'", sessionName, e);
          throw new ExecutionException(e);

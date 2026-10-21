@@ -18,7 +18,6 @@ package org.titou10.jtb.qm.activemq;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -26,6 +25,7 @@ import java.util.SortedMap;
 import java.util.SortedSet;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.concurrent.ConcurrentHashMap;
 
 import javax.jms.Connection;
 import javax.jms.JMSException;
@@ -45,6 +45,7 @@ import javax.management.remote.JMXServiceURL;
 import org.apache.activemq.ActiveMQConnection;
 import org.apache.activemq.ActiveMQConnectionFactory;
 import org.apache.activemq.advisory.DestinationSource;
+import org.apache.activemq.advisory.DestinationListener;
 import org.apache.activemq.command.ActiveMQQueue;
 import org.apache.activemq.command.ActiveMQTopic;
 import org.slf4j.Logger;
@@ -88,12 +89,10 @@ public class ActiveMQQManager extends QManager {
    private static final QueryExp           JMX_BROKER_QUERY       = Query
             .isInstanceOf(Query.value("org.apache.activemq.broker.jmx.BrokerViewMBean"));
 
-   private static final String             SYSTEM_PREFIX          = "ActiveMQ.";
+   // ActiveMQ reads its listener field twice during dispatch; never replace an installed listener with null.
+   private static final DestinationListener NO_DESTINATION_LISTENER = event -> {};
 
-   // Without JMX, destinations are discovered from advisory messages that arrive asynchronously (see withoutJMX())
-   private static final long               DISCOVERY_POLL_MS      = 100;
-   private static final long               DISCOVERY_STABLE_MS    = 500;
-   private static final long               DISCOVERY_MAX_WAIT_MS  = 5000;
+   private static final String             SYSTEM_PREFIX          = "ActiveMQ.";
 
    private static final String             CR                     = "\n";
 
@@ -116,7 +115,7 @@ public class ActiveMQQManager extends QManager {
 
    private static final String             HELP_TEXT;
 
-   private final Map<Integer, SessionInfo> sessionsInfo           = new HashMap<>();
+   private final Map<Integer, SessionInfo> sessionsInfo           = new ConcurrentHashMap<>();
 
    // ------------------------
    // Constructor
@@ -293,7 +292,7 @@ public class ActiveMQQManager extends QManager {
          jmsConnection.setClientID(clientID);
          jmsConnection.start();
 
-         // Without JMX, start collecting the destinations from the advisory messages right away (see withoutJMX())
+         // Begin receiving advisory messages before the initial destination snapshot is taken.
          if (!useJMX) {
             jmsConnection.getDestinationSource();
          }
@@ -323,7 +322,6 @@ public class ActiveMQQManager extends QManager {
       SortedSet<TopicData> listTopicData = new TreeSet<>();
 
       DestinationSource dstSource = ((ActiveMQConnection) jmsConnection).getDestinationSource();
-      waitForStableDestinations(dstSource);
 
       for (ActiveMQQueue queue : dstSource.getQueues()) {
          String dName = queue.getQueueName();
@@ -361,28 +359,19 @@ public class ActiveMQQManager extends QManager {
       return new DestinationData(listQueueData, listTopicData);
    }
 
-   // The DestinationSource learns about destinations from advisory messages that the broker sends asynchronously, one per
-   // destination. Reading it too early returns an incomplete list, so wait until no new destination arrived for a while
-   private void waitForStableDestinations(DestinationSource dstSource) throws InterruptedException {
-      long start = System.currentTimeMillis();
-      long lastChange = start;
-      int lastCount = -1;
-      while (true) {
-         int count = dstSource.getQueues().size() + dstSource.getTopics().size();
-         long now = System.currentTimeMillis();
-         if (count != lastCount) {
-            lastCount = count;
-            lastChange = now;
-         } else if (now - lastChange >= DISCOVERY_STABLE_MS) {
-            log.debug("{} destinations discovered after {} ms", count, now - start);
-            return;
-         }
-         if (now - start >= DISCOVERY_MAX_WAIT_MS) {
-            log.warn("Destinations still being discovered after {} ms. The list may be incomplete ({} so far)", now - start, count);
-            return;
-         }
-         Thread.sleep(DISCOVERY_POLL_MS);
+   @Override
+   public boolean setDestinationChangeListener(Connection jmsConnection, Runnable listener) throws Exception {
+      if (sessionsInfo.get(jmsConnection.hashCode()).isUseJMX()) {
+         return false;
       }
+      DestinationSource source = ((ActiveMQConnection) jmsConnection).getDestinationSource();
+      source.setDestinationListener(listener == null ? NO_DESTINATION_LISTENER : event -> {
+         // Temporary destinations are not displayed by this plugin.
+         if (!event.getDestination().isTemporary()) {
+            listener.run();
+         }
+      });
+      return true;
    }
 
    public DestinationData withJMX(Connection jmsConnection, boolean showSystemObjects) throws Exception {
