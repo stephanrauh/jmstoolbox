@@ -55,6 +55,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.titou10.jtb.config.ConfigManager;
 import org.titou10.jtb.config.JTBPreferenceStore;
+import org.titou10.jtb.jms.model.JTBConnection;
 import org.titou10.jtb.jms.model.JTBDestination;
 import org.titou10.jtb.jms.model.JTBSession;
 import org.titou10.jtb.jms.model.JTBSessionClientType;
@@ -238,6 +239,38 @@ public class JTBSessionsBrowserViewPart {
          treeViewer.setExpandedElements(expandedElements);
          treeViewer.setExpandedTreePaths(expandedTreePaths);
       }
+   }
+
+   @Inject
+   @Optional
+   @SuppressWarnings("unchecked")
+   public void destinationsChanged(@UIEventTopic(Constants.EVENT_DESTINATIONS_CHANGED) JTBConnection connection) {
+      if (treeViewer == null || treeViewer.getControl().isDisposed() || !connection.isConnected()) {
+         return;
+      }
+      NodeJTBSession node = findSessionNode((SortedSet<NodeAbstract>) treeViewer.getInput(), connection);
+      if (node != null) {
+         // Rebuild this session's folders without replacing the tree input or toggling expansion.
+         node.hasChildren();
+         treeViewer.refresh(node, true);
+      }
+   }
+
+   private NodeJTBSession findSessionNode(SortedSet<? extends NodeAbstract> nodes, JTBConnection connection) {
+      for (NodeAbstract node : nodes) {
+         if (node instanceof NodeJTBSession sessionNode) {
+            JTBSession session = (JTBSession) sessionNode.getBusinessObject();
+            if (session.getSessionDef() == connection.getSessionDef()) {
+               return sessionNode;
+            }
+         } else if (node instanceof NodeFolder && node.getChildren() != null) {
+            NodeJTBSession found = findSessionNode(node.getChildren(), connection);
+            if (found != null) {
+               return found;
+            }
+         }
+      }
+      return null;
    }
 
    @Inject

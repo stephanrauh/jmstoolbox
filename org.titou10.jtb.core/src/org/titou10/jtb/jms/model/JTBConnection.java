@@ -51,6 +51,7 @@ import org.titou10.jtb.config.JTBPreferenceStore;
 import org.titou10.jtb.config.gen.DestinationFilter;
 import org.titou10.jtb.config.gen.SessionDef;
 import org.titou10.jtb.jms.qm.DestinationData;
+import org.titou10.jtb.jms.qm.DestinationDiscovery;
 import org.titou10.jtb.jms.qm.QManager;
 import org.titou10.jtb.jms.qm.QueueData;
 import org.titou10.jtb.jms.qm.TopicData;
@@ -85,10 +86,18 @@ public class JTBConnection {
    private JTBPreferenceStore   ps;
 
    // JMS Provider Information
-   private boolean              connected;
+   private volatile boolean     connected;
    private Connection           jmsConnection;
    private Session              jmsSession;
    private Map<String, Session> jmsAsynchronousSessions       = new HashMap<>();
+
+   private volatile DestinationDiscovery destinationDiscovery;
+   private Session discoverySession;
+   private volatile Runnable destinationsChangedListener;
+
+   public void setDestinationsChangedListener(Runnable listener) {
+      destinationsChangedListener = listener;
+   }
 
    // Connection Metadata
    private String               metaJMSVersion                = UNKNOWN;
@@ -97,15 +106,18 @@ public class JTBConnection {
    private String               metaProviderVersion           = UNKNOWN;
 
    // Children
-   private SortedSet<JTBQueue>  jtbQueues;
-   private SortedSet<JTBTopic>  jtbTopics;
+   // Threading: GUI, REST, script and discovery threads share a connection. Writers (connect, disconnect, rescan,
+   // refresh, filter updates) hold this object's lock. The sets are immutable and replaced as a whole, so readers use
+   // the volatile fields without locking. Lock order: this lock, then DestinationDiscovery's monitor, never the reverse.
+   private volatile SortedSet<JTBQueue> jtbQueues = Collections.emptySortedSet();
+   private volatile SortedSet<JTBTopic> jtbTopics = Collections.emptySortedSet();
 
-   private SortedSet<JTBQueue>  jtbQueuesFiltered;
-   private SortedSet<JTBTopic>  jtbTopicsFiltered;
+   private volatile SortedSet<JTBQueue> jtbQueuesFiltered = Collections.emptySortedSet();
+   private volatile SortedSet<JTBTopic> jtbTopicsFiltered = Collections.emptySortedSet();
 
    // Destination filter
    private String               filterPattern;
-   private boolean              apply;
+   private volatile boolean     apply;
    private String               filterRegexPattern;
 
    // ------------------------
@@ -121,11 +133,6 @@ public class JTBConnection {
       this.jtbSessionClientType = jtbSessionClientType;
       this.sessionDef = sessionDef;
       this.qm = qm;
-
-      this.jtbQueues = new TreeSet<>();
-      this.jtbTopics = new TreeSet<>();
-      this.jtbQueuesFiltered = new TreeSet<>();
-      this.jtbTopicsFiltered = new TreeSet<>();
 
       this.connected = false;
 
@@ -164,11 +171,11 @@ public class JTBConnection {
    // ------------------------
    // Filter Management
    // ------------------------
-   public void updateFilterData(boolean apply) {
+   public synchronized void updateFilterData(boolean apply) {
       updateFilterData(this.filterPattern, apply);
    }
 
-   public void updateFilterData(String filterPattern, boolean apply) {
+   public synchronized void updateFilterData(String filterPattern, boolean apply) {
       this.filterPattern = filterPattern;
 
       if (filterPattern == null) {
@@ -183,26 +190,25 @@ public class JTBConnection {
    }
 
    private void buildFilteredSortedSet() {
-
-      jtbQueuesFiltered.clear();
-      jtbTopicsFiltered.clear();
-
       if (filterRegexPattern == null) {
-         jtbQueuesFiltered.addAll(jtbQueues);
-         jtbTopicsFiltered.addAll(jtbTopics);
+         jtbQueuesFiltered = jtbQueues;
+         jtbTopicsFiltered = jtbTopics;
          return;
       }
-      for (JTBQueue jtbQueue : jtbQueues) {
-         if (jtbQueue.getName().matches(filterRegexPattern)) {
-            jtbQueuesFiltered.add(jtbQueue);
+      SortedSet<JTBQueue> queues = new TreeSet<>();
+      for (JTBQueue queue : jtbQueues) {
+         if (queue.getName().matches(filterRegexPattern)) {
+            queues.add(queue);
          }
       }
-
-      for (JTBTopic jtbTopic : jtbTopics) {
-         if (jtbTopic.getName().matches(filterRegexPattern)) {
-            jtbTopicsFiltered.add(jtbTopic);
+      SortedSet<JTBTopic> topics = new TreeSet<>();
+      for (JTBTopic topic : jtbTopics) {
+         if (topic.getName().matches(filterRegexPattern)) {
+            topics.add(topic);
          }
       }
+      jtbQueuesFiltered = Collections.unmodifiableSortedSet(queues);
+      jtbTopicsFiltered = Collections.unmodifiableSortedSet(topics);
    }
 
    public SortedSet<JTBQueue> getJtbQueuesToDisplay() {
@@ -242,8 +248,34 @@ public class JTBConnection {
    // Session Interaction
    // ------------------------
 
-   @SuppressWarnings("unchecked")
    public void connect() throws Exception {
+      // The GUI doesn't wait for destination discovery: it shows the first snapshot right away, and the session browser
+      // updates live as more destinations arrive (EVENT_DESTINATIONS_CHANGED). Waiting here would freeze the UI thread.
+      boolean gui = jtbSessionClientType == JTBSessionClientType.GUI;
+      connect(gui ? 0 : DestinationDiscovery.DEFAULT_TIMEOUT_MS,
+              gui ? 0 : DestinationDiscovery.DEFAULT_QUIET_PERIOD_MS);
+   }
+
+   public void connect(long discoveryTimeoutMs, long discoveryQuietPeriodMs) throws Exception {
+      DestinationDiscovery.validateTimes(discoveryTimeoutMs, discoveryQuietPeriodMs);
+      connectInternal();
+      DestinationDiscovery discovery = destinationDiscovery;
+      if (discovery != null) {
+         try {
+            if (!discovery.await(discoveryTimeoutMs, discoveryQuietPeriodMs)) {
+               log.warn("Destination discovery for '{}' timed out after {} ms before a quiet period of {} ms. "
+                        + "The list may be incomplete ({} queues and {} topics so far)",
+                        getSessionName(), discoveryTimeoutMs, discoveryQuietPeriodMs, jtbQueues.size(), jtbTopics.size());
+            }
+         } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw e;
+         }
+      }
+   }
+
+   @SuppressWarnings("unchecked")
+   private synchronized void connectInternal() throws Exception {
       log.debug("connect '{}'", this);
       if (this.isConnected()) {
          return;
@@ -257,34 +289,102 @@ public class JTBConnection {
 
       // Create JMS connection
       jmsConnection = qm.connect(sessionDef, showSystemObjects, clientId);
-      jmsSession = jmsConnection.createSession(true, Session.SESSION_TRANSACTED);
-      ConnectionMetaData meta = jmsConnection.getMetaData();
-      metaJMSProviderName = meta.getJMSProviderName();
-      metaProviderVersion = meta.getProviderVersion();
-      metaJMSVersion = meta.getJMSVersion();
-      metaJMSPropertyNames = Collections.list(meta.getJMSXPropertyNames());
-      Collections.sort(metaJMSPropertyNames);
+      Connection connection = jmsConnection;
+      DestinationDiscovery discovery = null;
+      try {
+         jmsSession = connection.createSession(true, Session.SESSION_TRANSACTED);
+         ConnectionMetaData meta = connection.getMetaData();
+         metaJMSProviderName = meta.getJMSProviderName();
+         metaProviderVersion = meta.getProviderVersion();
+         metaJMSVersion = meta.getJMSVersion();
+         metaJMSPropertyNames = Collections.list(meta.getJMSXPropertyNames());
+         Collections.sort(metaJMSPropertyNames);
 
-      // Build lists of destinations
-      DestinationData dd = qm.discoverDestinations(jmsConnection, showSystemObjects);
-      for (QueueData qData : dd.getListQueueData()) {
-         log.debug("jmsSession.createQueue '{}'", qData.getName());
-         Queue jmsQ = jmsSession.createQueue(qData.getName());
-         jtbQueues.add(new JTBQueue(this, qData.getName(), jmsQ, qData.isBrowsable()));
+         // Install the listener before reading the snapshot, so arrivals cannot fall through the gap.
+         discovery = new DestinationDiscovery(() -> refreshDiscoveredDestinations(connection),
+                  e -> log.error("Exception updating destinations of '{}'", getSessionName(), e));
+         if (qm.setDestinationChangeListener(connection, discovery::destinationsChanged)) {
+            discoverySession = connection.createSession(false, Session.AUTO_ACKNOWLEDGE);
+            destinationDiscovery = discovery;
+         } else {
+            discovery.close();
+         }
+         mergeDestinations(qm.discoverDestinations(connection, showSystemObjects), jmsSession, false);
+         connected = true;
+      } catch (Exception e) {
+         if (discovery != null) {
+            discovery.close();
+         }
+         destinationDiscovery = null;
+         try {
+            qm.setDestinationChangeListener(connection, null);
+         } catch (Exception detachFailure) {
+            e.addSuppressed(detachFailure);
+         }
+         try {
+            qm.close(connection);
+         } catch (Exception closeFailure) {
+            e.addSuppressed(closeFailure);
+         }
+         discoverySession = null;
+         jmsSession = null;
+         jtbQueues = Collections.emptySortedSet();
+         jtbTopics = Collections.emptySortedSet();
+         buildFilteredSortedSet();
+         throw e;
       }
-
-      for (TopicData tData : dd.getListTopicData()) {
-         log.debug("jmsSession.createTopic '{}'", tData.getName());
-         Topic jmsTopic = jmsSession.createTopic(tData.getName());
-         jtbTopics.add(new JTBTopic(this, tData.getName(), jmsTopic));
-      }
-
-      buildFilteredSortedSet();
-
-      connected = true;
    }
 
-   public void rescanDestinations() throws Exception {
+   private synchronized void refreshDiscoveredDestinations(Connection connection) throws Exception {
+      if (!connected || jmsConnection != connection) {
+         return; // A queued update from a disconnected or replaced connection.
+      }
+      boolean showSystemObjects = ps.getBoolean(Constants.PREF_SHOW_SYSTEM_OBJECTS);
+      boolean changed = mergeDestinations(qm.discoverDestinations(connection, showSystemObjects), discoverySession, true);
+      Runnable listener = destinationsChangedListener;
+      if (changed && listener != null) {
+         listener.run();
+      }
+   }
+
+   // Keep existing destination objects (open message tabs hold references to them).
+   private boolean mergeDestinations(DestinationData data, Session session, boolean removeMissing) throws JMSException {
+      boolean changed = false;
+      SortedSet<JTBQueue> updatedQueues = new TreeSet<>(jtbQueues);
+      SortedSet<JTBTopic> updatedTopics = new TreeSet<>(jtbTopics);
+      Map<String, JTBQueue> existingQueues = new HashMap<>();
+      jtbQueues.forEach(queue -> existingQueues.put(queue.getName(), queue));
+      Map<String, JTBTopic> existingTopics = new HashMap<>();
+      jtbTopics.forEach(topic -> existingTopics.put(topic.getName(), topic));
+      SortedSet<String> queues = new TreeSet<>();
+      for (QueueData queue : data.getListQueueData()) {
+         queues.add(queue.getName());
+         if (!existingQueues.containsKey(queue.getName())) {
+            updatedQueues.add(new JTBQueue(this, queue.getName(), session.createQueue(queue.getName()), queue.isBrowsable()));
+            changed = true;
+         }
+      }
+      SortedSet<String> topics = new TreeSet<>();
+      for (TopicData topic : data.getListTopicData()) {
+         topics.add(topic.getName());
+         if (!existingTopics.containsKey(topic.getName())) {
+            updatedTopics.add(new JTBTopic(this, topic.getName(), session.createTopic(topic.getName())));
+            changed = true;
+         }
+      }
+      if (removeMissing) {
+         changed |= updatedQueues.removeIf(q -> !queues.contains(q.getName()));
+         changed |= updatedTopics.removeIf(t -> !topics.contains(t.getName()));
+      }
+      if (changed) {
+         jtbQueues = Collections.unmodifiableSortedSet(updatedQueues);
+         jtbTopics = Collections.unmodifiableSortedSet(updatedTopics);
+         buildFilteredSortedSet();
+      }
+      return changed;
+   }
+
+   public synchronized void rescanDestinations() throws Exception {
       log.debug("rescanDestinations : '{}'", this);
       if (!(this.isConnected())) {
          // Should never occur
@@ -294,52 +394,49 @@ public class JTBConnection {
       boolean showSystemObjects = ps.getBoolean(Constants.PREF_SHOW_SYSTEM_OBJECTS);
       DestinationData dd = qm.discoverDestinations(jmsConnection, showSystemObjects);
 
-      // Only process additions
-      for (QueueData qData : dd.getListQueueData()) {
-         JTBDestination dest = getJTBDestinationByName(qData.getName());
-         if (dest == null) {
-            log.debug("new Queue: jmsSession.createQueue '{}'", qData.getName());
-            Queue jmsQ = jmsSession.createQueue(qData.getName());
-            jtbQueues.add(new JTBQueue(this, qData.getName(), jmsQ, qData.isBrowsable()));
-         }
-      }
-
-      for (TopicData tData : dd.getListTopicData()) {
-         JTBDestination dest = getJTBDestinationByName(tData.getName());
-         if (dest == null) {
-            log.debug("New Topic: jmsSession.createTopic '{}'", tData.getName());
-            Topic jmsTopic = jmsSession.createTopic(tData.getName());
-            jtbTopics.add(new JTBTopic(this, tData.getName(), jmsTopic));
-         }
-      }
-
-      buildFilteredSortedSet();
-
+      mergeDestinations(dd, jmsSession, destinationDiscovery != null);
    }
 
-   public void disconnect() throws JMSException {
+   public synchronized void disconnect() throws JMSException {
       log.debug("disconnect : '{}'", this);
       if (!(this.isConnected())) {
          return;
       }
 
+      // Stop queued updates before closing JMS; advisory callbacks never take this connection's lock.
+      connected = false;
+      DestinationDiscovery discovery = destinationDiscovery;
+      destinationDiscovery = null;
+      if (discovery != null) {
+         discovery.close();
+         try {
+            qm.setDestinationChangeListener(jmsConnection, null);
+         } catch (Exception e) {
+            log.warn("Exception detaching destination listener", e);
+         }
+      }
+      discoverySession = null;
+
       // No need to close sessions, producers etc . They will be closed when closing connection
       try {
          jmsConnection.stop();
+      } catch (Exception e) {
+         log.warn("Exception stopping connection. Continuing close: {}", e.getMessage());
+      }
+      try {
          qm.close(jmsConnection);
       } catch (Exception e) {
          log.warn("Exception occured when disconnecting. Ignoring: {}", e.getMessage());
       }
 
-      connected = false;
       // jmsSessionAsynchronous = null;
       jmsSession = null;
       jmsAsynchronousSessions.clear();
 
-      jtbQueues.clear();
-      jtbQueuesFiltered.clear();
-      jtbTopics.clear();
-      jtbTopicsFiltered.clear();
+      jtbQueues = Collections.emptySortedSet();
+      jtbQueuesFiltered = Collections.emptySortedSet();
+      jtbTopics = Collections.emptySortedSet();
+      jtbTopicsFiltered = Collections.emptySortedSet();
 
       metaJMSVersion = UNKNOWN;
       metaJMSProviderName = UNKNOWN;

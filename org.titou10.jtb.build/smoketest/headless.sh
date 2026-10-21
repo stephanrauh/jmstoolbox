@@ -58,6 +58,9 @@ trap cleanup EXIT
 echo "=== Starting the brokers"
 ./setup.sh
 
+echo "=== Checking discovery failures and lifecycle against ActiveMQ"
+python3 broker_discovery_check.py
+
 echo "=== Starting JMSToolBox with its REST services"
 ./run.sh --reset --rest --background
 log=target/workspace/JMSToolBox/jmstoolbox.log
@@ -72,6 +75,11 @@ curl -s -o /dev/null --max-time 2 http://localhost:9998/ || { echo "The REST ser
 echo "REST services up after ${i} s"
 
 failed=0
+
+echo "=== Checking asynchronous discovery timing"
+mkdir -p target/discovery-check
+javac -d target/discovery-check ../../org.titou10.jtb.core/src/org/titou10/jtb/jms/qm/DestinationDiscovery.java DiscoveryCheck.java
+java -cp target/discovery-check DiscoveryCheck || failed=1
 
 echo "=== Testing the sessions"
 python3 headless_test.py config.xml || failed=1

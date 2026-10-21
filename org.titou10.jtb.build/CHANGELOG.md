@@ -3,7 +3,8 @@
 - Important Changes
     - 
 - New features:
-    - 
+    - ActiveMQ Classic without JMX: the session browser updates live when queues and topics are created or deleted
+    - REST: `GET /rest/session/{sessionName}` accepts `discoveryTimeoutMs` and `discoveryQuietPeriodMs`
 - Bugs fixed:
     - Fixes #208: IBM MQ: Q Aliases to Topics do not respect JMS contract, causing major server stress when accessed by JTB 
     - ActiveMQ: Without JMX: Mitigate the fact that queues and topics are asynchronoulsy discovered 

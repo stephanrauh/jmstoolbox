@@ -152,6 +152,8 @@ public final class Constants {
 
    // E4 Events
    public static final String   EVENT_BASE                                 = "org/titou10/jtb/event/";
+   public static final String   EVENT_DESTINATIONS_CHANGED                 = EVENT_BASE + "destinations_changed";
+
    public static final String   EVENT_REFRESH_SESSION_BROWSER              = EVENT_BASE + "refresh_session_browser";
    public static final String   EVENT_REFRESH_TEMPLATES_BROWSER            = EVENT_BASE + "refresh_templates_browser";
    public static final String   EVENT_REFRESH_SCRIPTS_BROWSER              = EVENT_BASE + "scripts_browser";

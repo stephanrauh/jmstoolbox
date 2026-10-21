@@ -150,6 +150,46 @@ public class JMSToolBoxUITest {
    }
 
    @Test
+   public void destinationsUpdateWithoutManualRescan() throws Exception {
+      String sessionName = "Discovery 1"; // ActiveMQ advisory discovery, without JMX.
+      String name = "JTB.UI.LIVE." + System.nanoTime();
+      connect(sessionName);
+      try {
+         changeDestination("addQueue", name);
+         changeDestination("addTopic", name);
+         waitForLiveDestinations(sessionName, name, true);
+         step("New queue and topic appeared without reconnecting or rescanning");
+      } finally {
+         changeDestination("removeQueue", name);
+         changeDestination("removeTopic", name);
+      }
+      waitForLiveDestinations(sessionName, name, false);
+      step("Removed queue and topic disappeared without rescanning");
+   }
+
+   private static void waitForLiveDestinations(String sessionName, String name, boolean present) {
+      bot.waitUntil(new DefaultCondition() {
+         @Override
+         public boolean test() {
+            // Each live update can rebuild the tree: find its current items on each attempt.
+            SWTBotTreeItem session = sessionsTree().getTreeItem(sessionName).expand();
+            return session.getNode("Queues").expand().getNodes().contains(name) == present
+                   && session.getNode("Topics").expand().getNodes().contains(name) == present;
+         }
+
+         @Override
+         public String getFailureMessage() {
+            return "Queue and topic " + name + " did not " + (present ? "appear" : "disappear");
+         }
+      });
+   }
+
+   private static void changeDestination(String operation, String name) throws Exception {
+      jolokia("{\"type\":\"exec\",\"mbean\":\"org.apache.activemq:type=Broker,brokerName=localhost\","
+              + "\"operation\":\"" + operation + "\",\"arguments\":[\"" + name + "\"]}");
+   }
+
+   @Test
    public void sendMessageWithDialog() throws Exception {
       String payload = uniquePayload("sent with the dialog");
       purgeQueue();
@@ -630,14 +670,15 @@ public class JMSToolBoxUITest {
       bot.waitUntil(new DefaultCondition() {
          @Override
          public boolean test() {
-            return session.expand().getNodes().contains("Queues");
+            return sessionsTree().getTreeItem(sessionName).expand().getNodes().contains("Queues");
          }
 
          @Override
          public String getFailureMessage() {
-            return "Session '" + sessionName + "' did not connect. Nodes: " + session.getNodes();
+            return "Session '" + sessionName + "' did not connect";
          }
       });
+      session = sessionsTree().getTreeItem(sessionName);
       step("Session " + sessionName + " connected: " + session.getNodes());
       return session;
    }
@@ -652,12 +693,13 @@ public class JMSToolBoxUITest {
       bot.waitUntil(new DefaultCondition() {
          @Override
          public boolean test() {
-            return !session.expand().getNodes().contains("Queues");
+            // Each live update can rebuild the tree: find its current item on each attempt
+            return !sessionsTree().getTreeItem(sessionName).expand().getNodes().contains("Queues");
          }
 
          @Override
          public String getFailureMessage() {
-            return "Session '" + sessionName + "' did not disconnect. Nodes: " + session.getNodes();
+            return "Session '" + sessionName + "' did not disconnect";
          }
       });
       step("Disconnected session " + sessionName);
