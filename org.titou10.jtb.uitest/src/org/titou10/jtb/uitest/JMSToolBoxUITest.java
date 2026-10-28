@@ -43,6 +43,9 @@ import javax.jms.Session;
 import javax.jms.StreamMessage;
 
 import org.apache.activemq.ActiveMQConnectionFactory;
+import org.eclipse.swt.SWT;
+import org.eclipse.swt.custom.CTabFolder;
+import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
@@ -59,6 +62,7 @@ import org.eclipse.swtbot.swt.finder.exceptions.WidgetNotFoundException;
 import org.eclipse.swtbot.swt.finder.finders.UIThreadRunnable;
 import org.eclipse.swtbot.swt.finder.matchers.WidgetMatcherFactory;
 import org.eclipse.swtbot.swt.finder.utils.SWTBotPreferences;
+import org.eclipse.swtbot.swt.finder.waits.Conditions;
 import org.eclipse.swtbot.swt.finder.waits.DefaultCondition;
 import org.eclipse.swtbot.swt.finder.widgets.SWTBotShell;
 import org.eclipse.swtbot.swt.finder.widgets.SWTBotTabItem;
@@ -75,15 +79,28 @@ import org.junit.rules.TestWatcher;
 /**
  * UI tests of JMSToolBox, run in the real application by Tycho with SWTBot.
  *
- * The sessions come from org.titou10.jtb.build/smoketest/config.xml, the brokers from smoketest/docker-compose.yml. All tests
- * use the queue JTB.TEST of the ActiveMQ Classic session and empty it first
+ * The sessions come from org.titou10.jtb.build/smoketest/config.xml, the brokers from smoketest/docker-compose.yml. The message tests
+ * use the queue JTB.TEST.ACTIVEMQ of the ActiveMQ Classic session and empty it first. With the other brokers, a text message is
+ * sent and browsed with JMSToolBox only
  *
  */
 public class JMSToolBoxUITest {
 
    private static final String SESSION          = "ActiveMQ Classic";
    private static final String SESSION_ARTEMIS2 = "Artemis 2.x";
-   private static final String QUEUE            = "JTB.TEST";
+   private static final String SESSION_ARTEMIS1 = "Artemis 1.x";
+   private static final String SESSION_ORACLE   = "Oracle AQ";
+   private static final String SESSION_SOLACE   = "Solace";
+   // All sessions of smoketest/config.xml
+   private static final List<String> SESSIONS   = List.of(SESSION, SESSION_ARTEMIS2, SESSION_ARTEMIS1, SESSION_ORACLE,
+                                                          SESSION_SOLACE);
+   // Test queues created by setup.sh: a name of its own per broker, so that a test can not see the queue of another broker
+   private static final String QUEUE            = "JTB.TEST.ACTIVEMQ";
+   private static final String QUEUE_ARTEMIS2   = "JTB.TEST.ARTEMIS2";
+   private static final String QUEUE_ARTEMIS1   = "JTB.TEST.ARTEMIS1";
+   private static final String QUEUE_SOLACE     = "JTB.TEST.SOLACE";
+   // Oracle AQ doesn't allow dots in queue names. JMSToolBox shows the queue with its owner: JTB.JTB_TEST_ORACLE
+   private static final String QUEUE_ORACLE     = "JTB_TEST_ORACLE";
    private static final String VISUALIZER       = "SWTBot visualizer";
 
    // REST API (Jolokia) of the ActiveMQ Classic broker, used to prepare the queue
@@ -343,16 +360,152 @@ public class JMSToolBoxUITest {
    }
 
    // ----------------------------------------------------
-   // Artemis 2.x
+   // Other brokers
    // ----------------------------------------------------
 
+   // JMSToolBox shows a session in red if its Q Manager plugin is not installed or failed to start
    @Test
-   public void connectArtemis2SessionAndListQueues() {
-      SWTBotTreeItem session = connect(SESSION_ARTEMIS2);
+   public void allSessionsHaveAQManager() {
+      Tree tree = sessionsTree().widget;
+      List<String> shown = new ArrayList<>();
+      List<String> red = new ArrayList<>();
+      UIThreadRunnable.syncExec(() -> {
+         Color colorRed = Display.getDefault().getSystemColor(SWT.COLOR_RED);
+         for (TreeItem item : tree.getItems()) {
+            shown.add(item.getText());
+            // The viewer sets the color of the cell (column 0), not of the whole item
+            if (colorRed.equals(item.getForeground(0))) {
+               red.add(item.getText());
+            }
+         }
+      });
+      assertTrue("Sessions missing in " + shown, shown.containsAll(SESSIONS));
+      assertTrue("Sessions shown in red (Q Manager plugin missing or not started): " + red, red.isEmpty());
+      step("All sessions are shown with a Q Manager: " + SESSIONS);
+   }
 
-      SWTBotTreeItem queues = session.getNode("Queues").expand();
-      step("Expanded the queues of " + SESSION_ARTEMIS2 + ": " + queues.getNodes());
-      assertTrue("Queue " + QUEUE + " not found in " + queues.getNodes(), queues.getNodes().contains(QUEUE));
+   @Test
+   public void sendAndBrowseMessageArtemis2() {
+      sendAndBrowseMessage(SESSION_ARTEMIS2, QUEUE_ARTEMIS2);
+   }
+
+   @Test
+   public void sendAndBrowseMessageArtemis1() {
+      sendAndBrowseMessage(SESSION_ARTEMIS1, QUEUE_ARTEMIS1);
+   }
+
+   @Test
+   public void sendAndBrowseMessageOracleAq() {
+      sendAndBrowseMessage(SESSION_ORACLE, QUEUE_ORACLE);
+   }
+
+   @Test
+   public void sendAndBrowseMessageSolace() {
+      sendAndBrowseMessage(SESSION_SOLACE, QUEUE_SOLACE);
+   }
+
+   // A round trip with a broker, only with JMSToolBox: connects the session, finds the test queue of setup.sh (with or
+   // without the owner as prefix), empties it, sends a text message with a property with the dialog, browses the queue in
+   // the tab of the session until the message shows up, checks its payload and property, empties the queue and
+   // disconnects. The payload names the broker, so each tab shows a different message. The message tests above only use
+   // the ActiveMQ Classic session
+   private static void sendAndBrowseMessage(String sessionName, String queue) {
+      try {
+         List<String> names = connect(sessionName).getNode("Queues").expand().getNodes();
+         step("Expanded the queues of " + sessionName + ": " + names);
+         String found = names.stream().filter(n -> n.equals(queue) || n.endsWith("." + queue)).findFirst()
+                  .orElseThrow(() -> new AssertionError("Queue " + queue + " not found in " + names));
+
+         emptyQueue(sessionName, found);
+
+         // Right-click on the queue > "Send New Message..."
+         String payload = "swtbot message for " + sessionName + " " + System.currentTimeMillis();
+         queueNode(sessionName, found).contextMenu("Send New Message...").click();
+         SWTBotShell dialog = bot.shell("Send Message to " + sessionName + ":" + found);
+         SWTBot dialogBot = dialog.bot();
+         inTab(dialogBot, "Payload").text(0).setText(payload);
+         SWTBot properties = inTab(dialogBot, "Properties");
+         properties.text(0).setText("jtbUiTest");
+         properties.text(1).setText(sessionName);
+         properties.button("Add").click();
+         step("Opened the dialog '" + dialog.getText() + "', entered the payload '" + payload + "' and the property jtbUiTest="
+              + sessionName);
+         dialogBot.button("Send and Close").click();
+
+         browseUntilShown(sessionName, found, payload);
+         assertEquals(sessionName, valueInTable(inTab(bot, "Properties").table(), "jtbUiTest"));
+         // Show the payload in the details, for the picture of this step
+         new SWTBotTabItem(payloadTab()).activate();
+         step("The message is shown in the tab of " + sessionName + ", with its payload and the property jtbUiTest=" + sessionName);
+
+         emptyQueue(sessionName, found);
+      } finally {
+         disconnect(sessionName);
+      }
+   }
+
+   // The node of a queue in the sessions browser. Looked up again each time, as JMSToolBox rebuilds the tree on refreshes
+   private static SWTBotTreeItem queueNode(String sessionName, String queue) {
+      return sessionsTree().getTreeItem(sessionName).expand().getNode("Queues").expand().getNode(queue);
+   }
+
+   // Right-click on the queue > "Empty Queue", and "OK" in the confirmation dialog
+   private static void emptyQueue(String sessionName, String queue) {
+      queueNode(sessionName, queue).select().contextMenu("Empty Queue").click();
+      SWTBotShell confirmation = bot.shell("Confirmation");
+      confirmation.bot().button("OK").click();
+      bot.waitUntil(Conditions.shellCloses(confirmation));
+      step("Emptied queue " + queue + " of " + sessionName);
+   }
+
+   // Double-clicks on the queue and waits until the tab of the session shows exactly one message in the tab of the queue,
+   // with the given text payload. Browses again from time to time, as some brokers make a message visible to browsers
+   // only after a short delay
+   private static void browseUntilShown(String sessionName, String queue, String payload) {
+      queueNode(sessionName, queue).doubleClick();
+      int[] attempts = new int[1];
+      bot.waitUntil(new DefaultCondition() {
+         @Override
+         public boolean test() {
+            SWTBotTable table = messageTable(sessionName);
+            if (table != null && table.rowCount() == 1) {
+               table.select(0);
+               if (payload.equals(shownTextPayload())) {
+                  return true;
+               }
+            }
+            if (++attempts[0] % 4 == 0) {
+               queueNode(sessionName, queue).doubleClick();
+            }
+            return false;
+         }
+
+         @Override
+         public String getFailureMessage() {
+            return "Message '" + payload + "' not shown when browsing " + queue + " in the tab of " + sessionName;
+         }
+      });
+      step("Double-clicked queue " + queue + " and selected the message '" + payload + "' in the tab of " + sessionName);
+   }
+
+   // The text in the payload tab of the message details. null if not shown
+   private static String shownTextPayload() {
+      return UIThreadRunnable.syncExec(() -> {
+         TabItem item = payloadTab();
+         Text text = item == null || item.getControl() == null ? null
+                  : findWidget(List.of(item.getControl()), Text.class, t -> true);
+         return text == null ? null : text.getText();
+      });
+   }
+
+   // The payload tab of the message details of a text message ("Payload: <n> chars"). null if not shown
+   private static TabItem payloadTab() {
+      return UIThreadRunnable.syncExec(() -> {
+         TabFolder folder = findWidget(List.of(Display.getDefault().getShells()), TabFolder.class,
+                                       f -> f.isVisible() && Arrays.stream(f.getItems()).anyMatch(i -> i.getText().startsWith("Payload: ")));
+         return folder == null ? null
+                  : Arrays.stream(folder.getItems()).filter(i -> i.getText().startsWith("Payload: ")).findFirst().get();
+      });
    }
 
    @Test
@@ -489,6 +642,27 @@ public class JMSToolBoxUITest {
       return session;
    }
 
+   // Right-click on the session > "Disconnect", if it is connected, and waits until its folders are gone
+   private static void disconnect(String sessionName) {
+      SWTBotTreeItem session = sessionsTree().getTreeItem(sessionName);
+      if (!session.expand().getNodes().contains("Queues")) {
+         return;
+      }
+      session.select().contextMenu("Disconnect").click();
+      bot.waitUntil(new DefaultCondition() {
+         @Override
+         public boolean test() {
+            return !session.expand().getNodes().contains("Queues");
+         }
+
+         @Override
+         public String getFailureMessage() {
+            return "Session '" + sessionName + "' did not disconnect. Nodes: " + session.getNodes();
+         }
+      });
+      step("Disconnected session " + sessionName);
+   }
+
    // Double clicks on the queue, waits until the table shows exactly one message, selects it and waits until its toString
    // contains the payload. Waiting for the payload makes sure that it's not the table of a previous test
    private static SWTBotTable browseQueueUntilShown(String payload) {
@@ -497,7 +671,7 @@ public class JMSToolBoxUITest {
       bot.waitUntil(new DefaultCondition() {
          @Override
          public boolean test() {
-            SWTBotTable table = messageTable();
+            SWTBotTable table = messageTable(SESSION);
             if (table == null || table.rowCount() != 1) {
                return false;
             }
@@ -528,10 +702,17 @@ public class JMSToolBoxUITest {
       return new SWTBotTree(tree);
    }
 
-   // The table of the messages of a queue, recognized by its "JMS Timestamp" column. null if not shown (yet)
-   private static SWTBotTable messageTable() {
-      Table table = findWidget(Table.class,
-                               t -> Arrays.stream(t.getColumns()).anyMatch(c -> c.getText().equals("JMS Timestamp")));
+   // The table of the messages of the queue shown in the tab of the session, recognized by its "JMS Timestamp" column.
+   // null if the tab of the session is not the one shown or has no queue tab (yet)
+   private static SWTBotTable messageTable(String sessionName) {
+      Table table = UIThreadRunnable.syncExec(() -> {
+         CTabFolder sessions = findWidget(List.of(Display.getDefault().getShells()), CTabFolder.class,
+                                          f -> f.getSelection() != null && f.getSelection().getText().equals(sessionName));
+         // The tabs of the other sessions and queues are hidden, so only the table of the queue shown is visible
+         return sessions == null ? null
+                  : findWidget(List.of(sessions), Table.class, t -> t.isVisible() && Arrays.stream(t.getColumns())
+                           .anyMatch(c -> c.getText().equals("JMS Timestamp")));
+      });
       return table == null ? null : new SWTBotTable(table);
    }
 

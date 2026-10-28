@@ -6,7 +6,8 @@
 # Each step is logged ("UI: ...") and shown with a picture of the windows in the report org.titou10.jtb.uitest/target/uitest-report.
 # Options:
 #   --keep  leave the brokers running afterwards (stop them with: docker compose down -v)
-#   --slow  pause 500 ms between SWTBot actions, to watch the tests
+#   --slow  pause 500 ms between SWTBot actions, to watch the tests (takes about 6 minutes). Without it, the tab of
+#           each broker other than ActiveMQ Classic is only shown for a fraction of a second before it is disconnected
 set -euo pipefail
 cd "$(dirname "$0")"
 

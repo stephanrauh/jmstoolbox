@@ -14,9 +14,15 @@ import xml.etree.ElementTree as ET
 BASE_URL = "http://localhost:9998/rest"
 TIMEOUT = 60  # seconds per request
 
-# Test queue created by setup.sh. Oracle AQ doesn't allow dots in queue names
-TEST_QUEUE = "JTB.TEST"
-TEST_QUEUE_ORACLE = "JTB_TEST"
+# Test queue of each session, created by setup.sh: a name of its own per broker, so that a test can not see the queue of
+# another broker. Oracle AQ doesn't allow dots in queue names; JMSToolBox shows its queues with the owner: JTB.JTB_TEST_ORACLE
+TEST_QUEUES = {
+    "ActiveMQ Classic": "JTB.TEST.ACTIVEMQ",
+    "Artemis 2.x": "JTB.TEST.ARTEMIS2",
+    "Artemis 1.x": "JTB.TEST.ARTEMIS1",
+    "Oracle AQ": "JTB_TEST_ORACLE",
+    "Solace": "JTB.TEST.SOLACE",
+}
 
 
 def request(method, path, body=None):
@@ -45,9 +51,10 @@ def test_session(session):
 
     status, destinations = request("GET", f"/session/{s}")
     names = [d["name"] for d in destinations or []]
-    queue = next((n for n in names if n == TEST_QUEUE or n.endswith(TEST_QUEUE_ORACLE)), None)
+    test_queue = TEST_QUEUES[session]
+    queue = next((n for n in names if n == test_queue or n.endswith("." + test_queue)), None)
     if queue is None:
-        raise AssertionError(f"test queue not found among {len(names)} destinations: {names[:10]}")
+        raise AssertionError(f"test queue {test_queue} not found among {len(names)} destinations: {names[:10]}")
     d = q(queue)
 
     request("DELETE", f"/message/{s}/{d}")

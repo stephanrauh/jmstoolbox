@@ -133,7 +133,7 @@ The script
 - starts JMSToolBox with a separate workspace (your `<user_home>/.jtb` folder is not touched) that already contains a session for each broker
 - stops and removes the brokers when JMSToolBox is closed
 
-In JMSToolBox, open each session, send a message to the queue `JTB.TEST` (`JTB_TEST` for Oracle AQ) and check that it shows up when browsing the queue.
+In JMSToolBox, open each session, send a message to its test queue (`JTB.TEST.ACTIVEMQ`, `JTB.TEST.ARTEMIS2`, `JTB.TEST.ARTEMIS1`, `JTB.TEST.SOLACE`, `JTB_TEST_ORACLE` for Oracle AQ) and check that it shows up when browsing the queue.
 Also run a script (Scripts tab) to check the JavaScript engine.
 In case of problems, the log is in `org.titou10.jtb.build/smoketest/target/workspace/JMSToolBox/jmstoolbox.log`
 

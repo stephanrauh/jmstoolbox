@@ -128,6 +128,10 @@
                      <requirement><type>eclipse-plugin</type><id>org.titou10.jtb.core</id><versionRange>0.0.0</versionRange></requirement>
                      <requirement><type>eclipse-plugin</type><id>org.titou10.jtb.qm.activemq</id><versionRange>0.0.0</versionRange></requirement>
                      <requirement><type>eclipse-plugin</type><id>org.titou10.jtb.qm.artemis2</id><versionRange>0.0.0</versionRange></requirement>
+                     <!-- The Q Managers of all sessions in smoketest/config.xml. Without them, their sessions are shown in red -->
+                     <requirement><type>eclipse-plugin</type><id>org.titou10.jtb.qm.artemis</id><versionRange>0.0.0</versionRange></requirement>
+                     <requirement><type>eclipse-plugin</type><id>org.titou10.jtb.qm.oracleaq</id><versionRange>0.0.0</versionRange></requirement>
+                     <requirement><type>eclipse-plugin</type><id>org.titou10.jtb.qm.solace</id><versionRange>0.0.0</versionRange></requirement>
                      <requirement><type>eclipse-plugin</type><id>org.eclipse.e4.ui.workbench.swt</id><versionRange>0.0.0</versionRange></requirement>
                      <requirement><type>eclipse-plugin</type><id>org.eclipse.e4.ui.workbench.renderers.swt</id><versionRange>0.0.0</versionRange></requirement>
                      <requirement><type>eclipse-plugin</type><id>org.eclipse.e4.ui.workbench.addons.swt</id><versionRange>0.0.0</versionRange></requirement>
