@@ -1,0 +1,4 @@
+/target/
+/bin/
+# JMS client copied by Maven (copy-libs in pom.xml)
+/lib/
