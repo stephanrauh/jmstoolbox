@@ -91,7 +91,7 @@ public class JMSToolBoxUITest {
    private static final String SESSION_ARTEMIS1 = "Artemis 1.x";
    private static final String SESSION_ORACLE   = "Oracle AQ";
    private static final String SESSION_SOLACE   = "Solace";
-   // All sessions of smoketest/config.xml
+   // One session per broker of smoketest/config.xml (the "Discovery" sessions use ActiveMQ Classic too)
    private static final List<String> SESSIONS   = List.of(SESSION, SESSION_ARTEMIS2, SESSION_ARTEMIS1, SESSION_ORACLE,
                                                           SESSION_SOLACE);
    // Test queues created by setup.sh: a name of its own per broker, so that a test can not see the queue of another broker
