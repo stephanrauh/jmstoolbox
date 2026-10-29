@@ -7,8 +7,18 @@
 - Bugs fixed:
     - Fixes #208: IBM MQ: Q Aliases to Topics do not respect JMS contract, causing major server stress when accessed by JTB 
     - ActiveMQ: Without JMX: Mitigate the fact that queues and topics are asynchronoulsy discovered 
+    - Visualizers: JavaScript regular expressions failed, as the GraalJS regex engine was missing
 - Other:  
-    - Upgraded Apache ActiveMQ jars to v5.19.12   
+    - Third-party jars are now downloaded by Maven at build time instead of being stored in git
+    - Upgraded Apache Artemis 2.x jars to v2.57.0
+    - Upgraded Apache ActiveMQ jars to v5.19.12
+    - Upgraded GraalVM jars to v25.4.4.1.1
+    - Apache Artemis 1.x: replaced netty-all v4.1.5 by the Netty v4.1.139 jars used by the Artemis 1.5.6 client
+    - Azure Service Bus: upgraded qpid-jms-client to v1.17.0, proton-j to v0.35.0, async-http-client to v2.16.1, Netty to v4.1.139
+    - Oracle AQ: upgraded ojdbc11 to v21.23.0.0
+    - Solace: upgraded Netty to v4.1.139, commons-logging to v1.4.0, yasson to v3.0.5, parsson to v1.1.9. The logs of the Solace client now go to jmstoolbox.log (level INFO)
+    - REST services: upgraded Jetty to v12.0.40, RESTEasy to v6.2.19, Jackson to v2.18.12
+    - Upgraded jaxb-osgi to v4.0.9, commons-beanutils to v1.11.0 (Artemis 1.x)
     
 2026-09-11 v8.2.0
 ------------------
